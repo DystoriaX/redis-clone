@@ -1,8 +1,26 @@
+#include "data.h"
+#include "helper.h"
+
 #include <iostream>
 #include <cstring>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/ip.h>
+
+void send_query(int connfd, const char* text) {
+  uint32_t len = strlen(text);
+
+  if (len > max_msg) {
+    throw std::runtime_error("too long");
+  }
+
+  char wbuf[4 + max_msg + 1] = {};
+
+  memcpy(wbuf, &len, 4);
+  memcpy(wbuf + 4, text, len);
+
+  helper::write_all(connfd, wbuf, len + 4);
+}
 
 int main() {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -22,20 +40,15 @@ int main() {
     perror("connect()");
   }
 
-  std::string msg;
+  send_query(fd, "oh no\n");
+  send_query(fd, "oh noo\n");
+  send_query(fd, "oh nooo\n");
 
-  std::cin >> msg;
+  Query q = helper::read_msg(fd, 4 + max_msg + 1);
+  q = helper::read_msg(fd, 4 + max_msg + 1);
+  q = helper::read_msg(fd, 4 + max_msg + 1);
 
-  write(fd, msg.c_str(), msg.size());
-
-  char rbuf[64] = {};
-  ssize_t n = read(fd, rbuf, sizeof(rbuf) - 1);
-
-  if (n < 0) {
-    perror("read()");
-  }
-
-  std::cout << "server says: " << msg << "\n";
+  std::cout << q.msg << "\n";
 
   return 0;
 }

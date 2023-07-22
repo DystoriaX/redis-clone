@@ -1,22 +1,19 @@
+#include "helper.h"
+#include "data.h"
+
 #include <iostream>
 #include <cstring>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/ip.h>
 
-void echo(int connfd) {
-  char rbuf[64] = {};
+void handle_conn(int connfd) {
+  Query q = helper::read_msg(connfd, 4 + max_msg + 1);
 
-  ssize_t n = read(connfd, rbuf, sizeof(rbuf) - 1);
+  std::cout << "server received: " << q.msg << "\n";
 
-  if (n < 0) {
-    std::cerr << "read() error\n";
-    return;
-  }
-
-  std::cout << "client says: " << rbuf << "\n";
-
-  write(connfd, rbuf, strlen(rbuf));
+  // echo reply
+  helper::send_msg(connfd, q.msg.c_str(), 4 + max_msg + 1);
 }
 
 
@@ -46,15 +43,24 @@ int main() {
     socklen_t socklen = sizeof(client_addr);
 
     std::cout << "listening...\n";
-    int connfd = accept(fd, (struct sockaddr*) &client_addr, &socklen);
-    std::cout << "new client accepted\n";
-
+    int connfd = accept(fd, (sockaddr*) &client_addr, &socklen);
     if (connfd < 0) {
       continue;
     }
 
-    echo(connfd);
+    std::cout << "new client accepted\n";
+
+    while (true) {
+      try {
+        handle_conn(connfd);
+      } catch (const std::runtime_error& e) {
+        std::cout << e.what() << "\n";
+        break;
+      }
+    }
+
     close(connfd);
+    std::cout << "server has closed the connection...\n";
   }
 
   return 0;
