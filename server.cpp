@@ -1,4 +1,5 @@
 #include "helper.h"
+#include "parser.h"
 #include "data.h"
 
 #include <cstring>
@@ -92,11 +93,11 @@ struct Conn {
   connstate state;
 
   size_t rbuf_size = 0;
-  uint8_t rbuf[4 + max_msg];
+  std::array<uint8_t, 4 + max_msg> rbuf;
 
   size_t wbuf_size = 0;
   size_t wbuf_sent = 0;
-  uint8_t wbuf[4 + max_msg];
+  std::array<uint8_t, 4 + max_msg> wbuf;
 };
 
 void set_fd_nb(int);
@@ -166,7 +167,7 @@ void try_fill_buffer(Conn* conn) {
     auto cap = sizeof(conn->rbuf) - conn->rbuf_size;
 
     errno = 0;
-    rv = read(conn->fd, conn->rbuf + conn->rbuf_size, cap);
+    rv = read(conn->fd, conn->rbuf.data() + conn->rbuf_size, cap);
 
     // keep trying while it's interrupted
   } while (rv < 0 && errno == EINTR);
@@ -193,37 +194,36 @@ void try_fill_buffer(Conn* conn) {
 }
 
 bool try_one_req(Conn* conn) {
-  if (conn->rbuf_size < 4) {
-    return false;
-  }
+  std::optional<Req> o_req;
 
-  uint32_t len = 0;
-  memcpy(&len, conn->rbuf, 4);
-
-  if (len > max_msg) {
-    // should send error to client...?
-    std::cerr << "Too long...\n";
+  try {
+    o_req = parser::parse_req(conn->rbuf.data(), conn->rbuf_size);
+  } catch (const RequestTooLong& e) {
     conn->state = connstate::end;
     return false;
   }
 
-  if (len + 4 > conn->rbuf_size) {
-    // std::cerr << "len: " << len << "\n";
-    // std::cerr << "buffer len: " << conn->rbuf_size << "\n";
+  if (!o_req) {
     return false;
   }
 
-  std::cout << "client says: " << (char*) &conn->rbuf[4] << "\n";
+  Req req = o_req.value();
+
+  std::cout << "client says: " << req.payload << "\n";
 
   // append to what needs to be written out
-  memcpy(&conn->wbuf[conn->wbuf_size], &len, 4);
-  memcpy(&conn->wbuf[conn->wbuf_size + 4], &conn->rbuf[4], len);
-  conn->wbuf_size += 4 + len;
+
+  auto serialized_res = req.serialize();
+
+  memcpy(&conn->wbuf[conn->wbuf_size], serialized_res.data(), serialized_res.size());
+  conn->wbuf_size += serialized_res.size();
 
   // reclaim read buffer. Note: can be further optimized
+  uint32_t len = req.payload.size();
+
   size_t remain = conn->rbuf_size - (4 + len);
   if (remain) {
-    memmove(conn->rbuf, &conn->rbuf[4 + len], remain);
+    memmove(conn->rbuf.data(), &conn->rbuf[4 + len], remain);
   }
 
   conn->rbuf_size = remain;
@@ -236,7 +236,7 @@ void handle_res(Conn* conn) {
 
   do {
     auto remain = conn->wbuf_size - conn->wbuf_sent;
-    rv = write(conn->fd, conn->wbuf + conn->wbuf_sent, remain);
+    rv = write(conn->fd, conn->wbuf.data() + conn->wbuf_sent, remain);
   } while (rv < 0 && errno == EINTR);
 
   if (rv < 0 && errno == EAGAIN) {
