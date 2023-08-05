@@ -45,9 +45,12 @@ int main() {
   send_query(fd, "oh nooo\n");
 
   Query q = helper::read_msg(fd, 4 + max_msg + 1);
-  q = helper::read_msg(fd, 4 + max_msg + 1);
-  q = helper::read_msg(fd, 4 + max_msg + 1);
+  std::cout << q.msg << "\n";
 
+  q = helper::read_msg(fd, 4 + max_msg + 1);
+  std::cout << q.msg << "\n";
+
+  q = helper::read_msg(fd, 4 + max_msg + 1);
   std::cout << q.msg << "\n";
 
   return 0;
