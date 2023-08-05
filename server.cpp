@@ -110,6 +110,7 @@ bool try_one_req(Conn*);
 void handle_res(Conn*);
 void try_flush_buffer(Conn*);
 
+std::unique_ptr<Conn> accept_new_conn(int listenfd);
 void run_server(int listenfd);
 
 void set_fd_nb(int fd) {
