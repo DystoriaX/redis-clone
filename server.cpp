@@ -1,17 +1,19 @@
+#include "cmd.h"
+#include "data.h"
 #include "helper.h"
 #include "parser.h"
-#include "data.h"
+#include "store.h"
 
 #include <cstring>
+#include <fcntl.h>
 #include <iostream>
 #include <memory>
+#include <netinet/ip.h>
+#include <sys/epoll.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #include <unordered_map>
 #include <vector>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/socket.h>
-#include <sys/epoll.h>
-#include <netinet/ip.h>
 
 class EpollWrapper {
 private:
@@ -71,20 +73,16 @@ public:
     return events;
   }
 
-  EpollWrapper(const EpollWrapper&) = delete;
-  EpollWrapper& operator=(const EpollWrapper&) = delete;
+  EpollWrapper(const EpollWrapper &) = delete;
+  EpollWrapper &operator=(const EpollWrapper &) = delete;
 
-  EpollWrapper(EpollWrapper&&) = delete;
-  EpollWrapper& operator=(EpollWrapper&&) = delete;
+  EpollWrapper(EpollWrapper &&) = delete;
+  EpollWrapper &operator=(EpollWrapper &&) = delete;
 
-  ~EpollWrapper() {
-    close(epollfd);
-  }
+  ~EpollWrapper() { close(epollfd); }
 };
 
-enum class connstate {
-  req, res, end
-};
+enum class connstate { req, res, end };
 
 struct Conn {
   int fd;
@@ -102,14 +100,14 @@ struct Conn {
 
 void set_fd_nb(int);
 
-void handle_conn(Conn*);
+void handle_conn(Conn *);
 
-void handle_req(Conn*);
-void try_fill_buffer(Conn*);
-bool try_one_req(Conn*);
+void handle_req(Conn *);
+void try_fill_buffer(Conn *);
+bool try_one_req(Conn *);
 
-void handle_res(Conn*);
-void try_flush_buffer(Conn*);
+void handle_res(Conn *);
+void try_flush_buffer(Conn *);
 
 std::unique_ptr<Conn> accept_new_conn(int listenfd);
 void run_server(int listenfd);
@@ -137,8 +135,8 @@ void set_fd_nb(int fd) {
 std::unique_ptr<Conn> accept_new_conn(int listenfd) {
   std::unique_ptr<Conn> new_conn(new Conn());
 
-  int fd = accept(listenfd, (sockaddr*) &new_conn->client_addr,
-                  &new_conn->addr_len);
+  int fd =
+      accept(listenfd, (sockaddr *)&new_conn->client_addr, &new_conn->addr_len);
 
   if (fd < 0) {
     perror("accept() error");
@@ -150,7 +148,7 @@ std::unique_ptr<Conn> accept_new_conn(int listenfd) {
   return new_conn;
 }
 
-void handle_req(Conn* conn) {
+void handle_req(Conn *conn) {
   try_fill_buffer(conn);
 
   conn->wbuf_sent = 0;
@@ -160,7 +158,7 @@ void handle_req(Conn* conn) {
   }
 }
 
-void try_fill_buffer(Conn* conn) {
+void try_fill_buffer(Conn *conn) {
   ssize_t rv = 0;
 
   do {
@@ -193,12 +191,15 @@ void try_fill_buffer(Conn* conn) {
   conn->rbuf_size += rv;
 }
 
-bool try_one_req(Conn* conn) {
+// TODO: encapsulate server as a class
+Store store;
+
+bool try_one_req(Conn *conn) {
   std::optional<Req> o_req;
 
   try {
     o_req = parser::parse_req(conn->rbuf.data(), conn->rbuf_size);
-  } catch (const RequestTooLong& e) {
+  } catch (const MessageTooLong &e) {
     conn->state = connstate::end;
     return false;
   }
@@ -211,11 +212,27 @@ bool try_one_req(Conn* conn) {
 
   std::cout << "client says: " << req.payload << "\n";
 
+  // process request
+
+  Res res;
+
+  try {
+    auto command = cmd::Command::deserialize(req.payload);
+    auto result = command->execute(store);
+
+    if (result.status == cmd::Status::success) {
+      res = Res{status::ok, result.payload};
+    }
+  } catch (const cmd::UnknownCommand &e) {
+    res = Res{status::bad_request, "invalid command format"};
+  }
+
   // append to what needs to be written out
 
-  auto serialized_res = req.serialize();
+  auto serialized_res = res.serialize();
 
-  memcpy(&conn->wbuf[conn->wbuf_size], serialized_res.data(), serialized_res.size());
+  memcpy(&conn->wbuf[conn->wbuf_size], serialized_res.data(),
+         serialized_res.size());
   conn->wbuf_size += serialized_res.size();
 
   // reclaim read buffer. Note: can be further optimized
@@ -231,7 +248,7 @@ bool try_one_req(Conn* conn) {
   return true;
 }
 
-void handle_res(Conn* conn) {
+void handle_res(Conn *conn) {
   ssize_t rv = 0;
 
   do {
@@ -258,7 +275,7 @@ void handle_res(Conn* conn) {
   }
 }
 
-void handle_conn(Conn* conn) {
+void handle_conn(Conn *conn) {
   if (conn->state == connstate::req) {
     handle_req(conn);
   } else if (conn->state == connstate::res) {
@@ -278,7 +295,7 @@ void run_server(int listenfd) {
     auto events = epoll.wait_fd(max_events);
     // std::cerr << "waited\n";
 
-    for (auto& ev : events) {
+    for (auto &ev : events) {
       if (ev.data.fd == listenfd) {
         auto conn = accept_new_conn(listenfd);
 
@@ -288,10 +305,11 @@ void run_server(int listenfd) {
 
         connections[conn->fd] = std::move(conn);
       } else {
-        Conn* conn = connections.at(ev.data.fd).get();
+        Conn *conn = connections.at(ev.data.fd).get();
         // std::cerr << "Handling client with fd " << conn->fd << "\n";
         handle_conn(conn);
-        // std::cerr << "Client has state " << static_cast<int>(conn->state) << "\n";
+        // std::cerr << "Client has state " << static_cast<int>(conn->state) <<
+        // "\n";
 
         if (conn->state == connstate::res) {
           epoll.mod_fd(conn->fd, EPOLLOUT | EPOLLERR);
@@ -325,7 +343,6 @@ void run_server(int listenfd) {
   //   }
   // close(connfd);
   // std::cout << "server has closed the connection...\n";
-
 }
 
 int main() {
@@ -341,7 +358,7 @@ int main() {
   addr.sin_port = ntohs(1234);
   addr.sin_addr.s_addr = ntohl(0);
 
-  if (bind(fd, (const sockaddr*) &addr, sizeof(addr))) {
+  if (bind(fd, (const sockaddr *)&addr, sizeof(addr))) {
     perror("bind()");
   }
 

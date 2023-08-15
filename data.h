@@ -10,23 +10,18 @@ struct Query {
   std::string msg;
 };
 
-enum class cmd {
-  get, set, del
-};
-
-// possible to use variant???
 struct Req {
-  cmd type;
   std::string payload;
+
   std::vector<uint8_t> serialize() const;
 };
 
-enum class status {
-  ok, bad_request
-};
+enum class status { ok, bad_request };
 
 struct Res {
   status stat;
   std::string payload;
-  std::string serialize() const;
+
+  std::string string_of_status() const;
+  std::vector<uint8_t> serialize() const;
 };
